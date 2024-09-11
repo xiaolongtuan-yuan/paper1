@@ -31,23 +31,24 @@ import json
 num_datasets = 100
 
 # 数据范围
-sfc_range = (5, 25)
-node_range = (10, 15)
-vnf_per_sfc_range = [2, 3]
+sfc_range = (3, 6)
+node_range = (20, 30)
+vnf_per_sfc_range = [4, 6]
 vnf_types_range = (1, 10)
-cpu_consumption_range = (10, 50)  # MIPS
-memory_consumption_range = (10, 50)  # MB
-storage_consumption_range = (10, 20)  # MB
+cpu_consumption_range = (30, 50)  # MIPS
+memory_consumption_range = (30, 50)  # MB
+storage_consumption_range = (30, 50)  # MB
 bandwidth_consumption_range = (1, 10)  # Mbps
-cpu_resource_range = (900, 1100)  # MIPS
-memory_resource_range = (900, 1100)  # MB
-storage_resource_range = (9 * 1024, 11 * 1024)  # MB (converted from GB)
-bandwidth_resource_range = (9 * 1024, 11 * 1024)  # Mbps (converted from Gbps)
+cpu_resource_range = (80, 100)  # MIPS
+memory_resource_range = (80, 100)  # MB
+storage_resource_range = (80, 100)  # MB (converted from GB)
+bandwidth_resource_range = (500, 1000)  # Mbps (converted from Gbps)
 propagation_delay_range = (2, 5)  # us
 transmission_delay_range = (9, 11)  # us
 latency_range = (15000, 30000)  # us
 safety_factor_range = (0.6, 1.0)
 
+dataset_name= 'sfc_datasets_miniresource'
 
 def generate_random_graph(num_nodes, num_edges):
     # 生成一个随机的复杂拓扑网络图
@@ -129,5 +130,5 @@ for _ in range(num_datasets):
     datasets.append(dataset)
 
 # 保存为JSON文件
-with open('data/sfc_datasets.json', 'w') as f:
+with open(f'data/{dataset_name}.json', 'w') as f:
     json.dump(datasets, f, indent=4)

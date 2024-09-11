@@ -7,6 +7,11 @@
 import numpy as np
 import pulp as lp
 
+from dataset_loader import load_dataset, process_datasets, single_bandwidth_resource, single_propagation_delay, \
+    single_transmission_delay, min_bandwidth_resource, max_dalay
+
+M = 1000
+
 
 def check_data_validity(data):
     for key, value in data.items():
@@ -151,37 +156,44 @@ class SFCPlacementSolver:
                 for n_s in range(self.num_nodes):  # n_s 是 f 的物理部署节点
                     for n_t in range(self.num_nodes):  # n_t 是 f' 的物理部署节点
                         if n_s != n_t:
-                            # 源节点流出约束：从源节点 n_s 必须有一条物理链路流出
-                            self.model += (
-                                    lp.lpSum(self.Y[i, f, f_prime, n_s, n_p] for n_p in range(self.num_nodes) if
-                                             (n_s, n_p) in self.L) == 1
-                            )
-                            # 目的节点流入约束：必须有一条物理链路流入目的节点 n_t
-                            self.model += (
-                                    lp.lpSum(self.Y[i, f, f_prime, n_p, n_t] for n_p in range(self.num_nodes) if
-                                             (n_p, n_t) in self.L) == 1
-                            )
+                            # 强制如果f和f_prime分别部署在不同物理节点n_s和n_d上，那么虚拟链路必须通过物理链路，即n_s出度>=1,n_t入度>=1
+                            self.model += lp.lpSum(self.Y[i, f, f_prime, n_s, n_p] for n_p in range(self.num_nodes) if
+                                                   (n_s, n_p) in self.L) >= 1 - M * (
+                                                  2 - self.X[i, f, n_s] - self.X[i, f_prime, n_t])
+                            self.model += lp.lpSum(self.Y[i, f, f_prime, n_p, n_t] for n_p in range(self.num_nodes) if
+                                                   (n_p, n_t) in self.L) >= 1 - M * (
+                                                  2 - self.X[i, f, n_s] - self.X[i, f_prime, n_t])
+
                             # 中间节点的流量守恒约束：对于中间节点，流入等于流出
                             for n in range(self.num_nodes):
                                 if n != n_s and n != n_t:
-                                    self.model += (
-                                            lp.lpSum(self.Y[i, f, f_prime, n_p, n] for n_p in range(self.num_nodes) if
-                                                     (n_p, n) in self.L) ==
-                                            lp.lpSum(self.Y[i, f, f_prime, n, n_p] for n_p in range(self.num_nodes) if
-                                                     (n, n_p) in self.L)
-                                    )
+                                    flow_in = lp.lpSum(self.Y[i, f, f_prime, n_p, n] for n_p in range(self.num_nodes) if
+                                                       (n_p, n) in self.L)
+                                    flow_out = lp.lpSum(
+                                        self.Y[i, f, f_prime, n, n_p] for n_p in range(self.num_nodes) if
+                                        (n, n_p) in self.L)
+                                    self.model += (flow_in - flow_out <= M * (
+                                            2 - self.X[i, f, n_s] - self.X[i, f_prime, n_t]))
+                                    self.model += (flow_out - flow_in <= M * (
+                                            2 - self.X[i, f, n_s] - self.X[i, f_prime, n_t]))
+                                    # lp.lpSum(self.Y[i, f, f_prime, n, n_p] for n_p in range(self.num_nodes) if (n, n_p) in self.L)
+                                    # == lp.lpSum(self.Y[i, f, f_prime, n_p, n] for n_p in range(self.num_nodes) if (n_p, n) in self.L)
+                                    # if self.X[i, f, n_s]==1， self.X[i, f_prime, n_t] == 1
+
                             # 虚拟链路的起点和终点必须与 VNF 的物理部署位置一致
                             self.model += (self.Y[i, f, f_prime, n_s, n_t] <= self.X[i, f, n_s])
                             self.model += (self.Y[i, f, f_prime, n_s, n_t] <= self.X[i, f_prime, n_t])
                         else:
-                            self.model += (self.Y[i, f, f_prime, n_s, n_t] == 0)
+                            self.model += (self.Y[i, f, f_prime, n_s, n_t] == 0)  # 不占用链路资源
 
     def solve(self):
         self.model.solve()
         if lp.LpStatus[self.model.status] == 'Optimal':
             print("Solution is optimal")
+            return True
         else:
             print("Solution is not optimal")
+            return False
 
     def get_results(self):
         # 提取结果
@@ -205,83 +217,92 @@ class SFCPlacementSolver:
         return {'placement': placement_results, 'links': link_results}
 
 
-if __name__ == '__main__':
-    # 假设的输入数据
-    num_sfc = 2  # SFC数量
-    vnf_per_sfc = [3, 2]  # 每个SFC中的VNF数量
-    num_nodes = 4  # 物理网络中的节点数量
-    num_links = 5  # 物理网络中的链路数量
+def run_solver_on_dataset(dataset):
+    # 从数据集中提取网络拓扑和资源信息
+    network_topology = dataset['network_topology']
+    network_resources = dataset['network_resources']
+    sfc_data = dataset['sfcs']
+    adjacency_list = dataset['adjacency_list']
 
-    # 资源限制（例如节点资源和链路带宽）
-    node_capacity = [10, 15, 20, 10]  # 每个物理节点的资源
-    link_capacity = {(0, 1): 10, (1, 2): 10, (2, 3): 15, (0, 2): 10, (1, 3): 20}  # 每条物理链路的带宽
+    # 提取物理节点和链路的资源
+    num_nodes = len(network_topology.nodes)
+    node_cpu_capacity = [network_resources[n]['cpu_resource'] for n in range(num_nodes)]
+    node_mem_capacity = [network_resources[n]['memory_resource'] for n in range(num_nodes)]
+    node_storage_capacity = [network_resources[n]['storage_resource'] for n in range(num_nodes)]
 
-    # VNF的资源需求（每个SFC的每个VNF在每个物理节点上的需求, 假设为常量1）
-    vnf_demand = 1
-
-    # 建立优化模型
-    model = lp.LpProblem("SFC_Placement", lp.LpMinimize)
-
-    # 定义变量X(i, f, n)
-    X = lp.LpVariable.dicts("X",
-                            ((i, f, n) for i in range(num_sfc)
-                             for f in range(vnf_per_sfc[i])
-                             for n in range(num_nodes)),
-                            cat=lp.LpBinary)
-
-    # 定义变量Y(f, f', n, n')
-    Y = lp.LpVariable.dicts("Y",
-                            ((i, f, f_prime, n, n_prime) for i in range(num_sfc)
-                             for f in range(vnf_per_sfc[i])
-                             for f_prime in range(vnf_per_sfc[i])
-                             for n in range(num_nodes)
-                             for n_prime in range(num_nodes)),
-                            cat=lp.LpBinary)
-
-    # 目标函数：最小化资源使用 (这里只是示例，可以根据具体问题定义目标函数)
-    model += lp.lpSum(X)
-
-    # 约束条件
-
-    # 1. 每个VNF只能放置在一个物理节点上
-    for i in range(num_sfc):
-        for f in range(vnf_per_sfc[i]):
-            model += lp.lpSum(X[i, f, n] for n in range(num_nodes)) == 1
-
-    # 2. 每个物理节点上的VNF资源消耗不能超过节点容量
     for n in range(num_nodes):
-        model += lp.lpSum(X[i, f, n] * vnf_demand for i in range(num_sfc)
-                          for f in range(vnf_per_sfc[i])) <= node_capacity[n]  # 这个嵌套循环返回关于变量n的列表，对其求和表示该节点上的所有VNF的资源消耗
+        for n_prime in range(num_nodes):
+            if n == n_prime:  # 同一设备
+                network_resources[(n, n_prime)] = {
+                    'bandwidth_resource': single_bandwidth_resource,
+                    'propagation_delay': single_propagation_delay,
+                    'transmission_delay': single_transmission_delay
+                }
+            if ((n, n_prime) not in network_resources) or ((n_prime, n) not in network_resources):  # 没有链路
+                network_resources[(n, n_prime)] = {
+                    'bandwidth_resource': min_bandwidth_resource,
+                    'propagation_delay': max_dalay,
+                    'transmission_delay': max_dalay
+                }
 
-    # 3. 每个物理链路上的虚拟链路资源消耗不能超过链路带宽
-    for (n, n_prime) in link_capacity:
-        model += lp.lpSum(Y[i, f, f_prime, n, n_prime] for i in range(num_sfc)
-                          for f in range(vnf_per_sfc[i])
-                          for f_prime in range(vnf_per_sfc[i])) <= link_capacity[(n, n_prime)]
+    link_capacity = {k: v['bandwidth_resource']
+                     for k, v in network_resources.items() if isinstance(k, tuple)}
+    link_propagation_delay = {k: v['propagation_delay']
+                              for k, v in network_resources.items() if isinstance(k, tuple)}
+    link_transmission_delay = {k: v['transmission_delay']
+                               for k, v in network_resources.items() if isinstance(k, tuple)}
 
-    # 4. VNF之间的虚拟链路只能放置在物理链路上，如果这两个VNF已放置在相应的物理节点上
-    for i in range(num_sfc):
-        for f in range(vnf_per_sfc[i] - 1):
-            for n in range(num_nodes):
-                for n_prime in range(num_nodes):
-                    model += Y[i, f, f + 1, n, n_prime] <= X[i, f, n]
-                    model += Y[i, f, f + 1, n, n_prime] <= X[i, f + 1, n_prime]
+    # 提取SFC信息
+    num_sfc = len(sfc_data)
+    vnf_per_sfc = [sfc['num_vnf'] for sfc in sfc_data]
+    max_vnf_per_sfc = max(vnf_per_sfc)
 
-                    model += Y[i, f, f, n, n_prime] == 0
+    # 创建资源需求矩阵 R_cpu, R_memory, R_storage
+    R_cpu = np.zeros((num_sfc, max_vnf_per_sfc))  # CPU资源矩阵
+    R_memory = np.zeros((num_sfc, max_vnf_per_sfc))  # 内存资源矩阵
+    R_storage = np.zeros((num_sfc, max_vnf_per_sfc))  # 存储资源矩阵
+    # 创建虚拟链路带宽需求矩阵 R_link(i, f, f')
+    R_link = np.zeros((num_sfc, max_vnf_per_sfc, max_vnf_per_sfc))
+    tolerable_delay = np.zeros((num_sfc,))  # 可容忍的延迟
+    safety_factor = np.zeros((num_sfc,))
 
-    # 求解模型
-    model.solve()
+    for i, sfc in enumerate(sfc_data):
+        tolerable_delay[i] = sfc['max_latency']
+        safety_factor[i] = sfc['safety_factor']
 
-    # 输出结果
-    for i in range(num_sfc):
-        for f in range(vnf_per_sfc[i]):
-            for n in range(num_nodes):
-                if lp.value(X[i, f, n]) == 1:
-                    print(f"SFC {i}, VNF {f} is placed on node {n}")
-    for i in range(num_sfc):
-        for f in range(vnf_per_sfc[i]):
-            for f_prime in range(vnf_per_sfc[i]):
-                for n in range(num_nodes):
-                    for n_prime in range(num_nodes):
-                        if lp.value(Y[i, f, f_prime, n, n_prime]) == 1:
-                            print(f"Virtual link {f}-{f_prime} is placed on physical link {n}-{n_prime}")
+        for f, vnf in enumerate(sfc['vnfs']):
+            R_cpu[i, f] = vnf['cpu_consumption']
+            R_memory[i, f] = vnf['memory_consumption']
+            R_storage[i, f] = vnf['storage_consumption']
+        for f, link in enumerate(sfc['links']):
+            bandwidth = link['bandwidth_consumption']
+            R_link[i, f, f + 1] = bandwidth
+
+    # 创建求解器并求解
+    solver = SFCPlacementSolver(sfc_data, num_sfc, max_vnf_per_sfc, num_nodes, node_cpu_capacity, node_mem_capacity,
+                                node_storage_capacity, link_capacity, link_propagation_delay,
+                                link_transmission_delay,
+                                R_cpu, R_memory, R_storage, R_link, tolerable_delay, safety_factor, adjacency_list)
+    if solver.solve():
+        results = solver.get_results()
+        # print(results)
+        return results
+    else:
+        return None
+
+
+if __name__ == '__main__':
+    if __name__ == '__main__':
+        # 加载和处理数据集
+        file_path = 'data/sfc_datasets_mini.json'
+        datasets = load_dataset(file_path)
+        processed_datasets = process_datasets(datasets)
+        for dataset in processed_datasets:
+            results = run_solver_on_dataset(dataset)
+            if results is not None:
+                for i, f, n in results['placement']:
+                    if i == 0:
+                        print((i, f, n))
+                for i, f, f_prime, n, n_prime in results['links']:
+                    if i == 0:
+                        print((i, f, f_prime, n, n_prime))

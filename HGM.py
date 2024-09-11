@@ -117,14 +117,13 @@ class HGMSolver:
 
         # 求解优化问题
         problem.solve()
-
-        # 输出结果
-        print(f"Status: {lp.LpStatus[problem.status]}")
-        # for var in problem.variables():
-        #     print(f"{var.name} = {var.varValue}")
-        self.get_results(X, Y)
-
-        return problem
+        if lp.LpStatus[problem.status] == 'Optimal':
+            print("Solution is optimal")
+            self.get_results(X, Y)
+            return True
+        else:
+            print("Solution is not optimal")
+            return False
 
     def add_placement_constraints(self, problem, X, Y):
         # 约束1：每个VNF必须放置在一个物理节点上
@@ -201,7 +200,6 @@ class HGMSolver:
                 for n_s in range(self.num_nodes):  # n_s 是 f 的物理部署节点
                     for n_t in range(self.num_nodes):  # n_t 是 f' 的物理部署节点
                         if n_s != n_t:
-                            '''
                             # 源节点流出约束：从源节点 n_s 必须有一条物理链路流出
                             problem += (
                                     lp.lpSum(Y[i, f, f_prime, n_s, n_p] for n_p in range(self.num_nodes) if
@@ -212,6 +210,7 @@ class HGMSolver:
                                     lp.lpSum(Y[i, f, f_prime, n_p, n_t] for n_p in range(self.num_nodes) if
                                              (n_p, n_t) in self.L) == 1
                             )
+                            '''
                             # 中间节点的流量守恒约束：对于中间节点，流入等于流出
                             for n in range(self.num_nodes):
                                 if n != n_s and n != n_t:
@@ -407,11 +406,16 @@ def run_solver_on_dataset(dataset):
                            node_storage_capacity, link_capacity, link_propagation_delay,
                            link_transmission_delay,
                            R_cpu, R_memory, R_storage, R_link, tolerable_delay, safety_factor, adjacency_list)
-    hgm_solver.ilp_solve()
+    return hgm_solver.ilp_solve()
 
 
 if __name__ == '__main__':
-    file_path = 'data/sfc_datasets.json'
+    file_path = 'data/sfc_datasets_mini.json'
     datasets = load_dataset(file_path)
     processed_datasets = process_datasets(datasets)
-    run_solver_on_dataset(processed_datasets[0])
+    feasible_solutions = []
+    for i, dataset in enumerate(processed_datasets[:20]):
+        if run_solver_on_dataset(dataset):
+            feasible_solutions.append(dataset)
+    print(f"feasible_solutions_count:{len(feasible_solutions)}")
+

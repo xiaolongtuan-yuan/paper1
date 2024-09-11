@@ -50,8 +50,10 @@ class Hypergraph:
             # 根据约束条件删除不可用的部署可能性
             vnf_placement = []
             for vnf in sfc.virtual_link:
-                possible_nodes = [(vnf, node) for node in context.physical_node_resources if
-                                  check_resource_constraints(node, vnf)]
+                possible_nodes = []
+                for node in context.physical_node_resources:
+                    if check_resource_constraints(node, vnf):
+                        possible_nodes.append((vnf, node))
                 vnf_placement.append(possible_nodes)
             edges = list(itertools.product(*vnf_placement))
             for hyperedge in edges:
@@ -67,7 +69,7 @@ class Hypergraph:
             conflict_graph.add_node(edge, weight=self.W[edge])
 
         # 检查超边之间的冲突
-        for edge1, edge2 in itertools.combinations(self.hyperedges, 2):
+        for edge1, edge2 in itertools.combinations(self.hyperedges.keys(), 2):
             # 检查是否共享任何 VNF 或物理节点
             nodes1 = {n for _, n in edge1}
             nodes2 = {n for _, n in edge2}

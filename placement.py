@@ -69,6 +69,64 @@ def ghm_place_sfc(context: Context):
     return S
 
 
+# 算法1 寻找权重最大的独立集合
+def vertex_set_search_algorithm(conflict_graph):
+    # Initialization: Initialize the independent set S
+    S = set()
+    Z = set(conflict_graph.nodes)
+
+    while Z:
+        # Choose the vertex with the maximum weight from Z
+        z_max = max(Z, key=lambda z: conflict_graph.nodes[z]['weight'])
+        S.add(z_max)
+
+        # Find all adjacent vertices of z_max
+        B_max = set(conflict_graph.neighbors(z_max))
+
+        # Update Z by removing z_max and its neighbors
+        Z -= {z_max}
+        Z -= B_max
+
+    # Return the selected independent set S
+    return S
+
+
+# 算法2
+def phi_claw_local_search_algorithm(S, conflict_graph):
+    # Step 1: Rank vertices in S based on their weights
+    S = sorted(S, key=lambda v: conflict_graph.nodes[v]['weight'], reverse=True)
+
+    i = 0
+    while i < len(S):
+        current_vertex = S[i]
+        B_i = list(conflict_graph.neighbors(current_vertex))
+        B_i = sorted(B_i, key=lambda v: conflict_graph.nodes[v]['weight'], reverse=True)
+
+        # Step 5: Set the i-th vertex as the center vertex of 𝜙-claw
+        for phi in range(1, 4):
+            found_claw = False
+
+            for j in range(len(B_i)):
+                candidate_set = set([current_vertex] + B_i[:phi])
+
+                # Check if candidate set forms a valid 𝜙-claw in the conflict graph
+                if all(not conflict_graph.has_edge(x, y) for x in candidate_set for y in candidate_set if x != y):
+                    found_claw = True
+                    new_S = (set(S) - set(B_i)) | candidate_set
+
+                    # Check if the weight of the new set is greater than the current set
+                    if sum(conflict_graph.nodes[v]['weight'] for v in new_S) > sum(
+                            conflict_graph.nodes[v]['weight'] for v in S):
+                        S = new_S
+                        i = 0  # Restart the search from the beginning with the new S
+                        break
+
+            if found_claw:
+                break
+
+        i += 1
+
+    return S
 
 
 def hga_place_sfc(sfc, physical_network):
@@ -89,7 +147,7 @@ if __name__ == '__main__':
     from dataset_loader import load_dataset, process_datasets
 
     # 加载和处理数据集
-    file_path = 'data/sfc_datasets.json'
+    file_path = 'data/sfc_datasets_mini.json'
     datasets = load_dataset(file_path)
     processed_datasets = process_datasets(datasets)
     one_dataset = processed_datasets[0]
